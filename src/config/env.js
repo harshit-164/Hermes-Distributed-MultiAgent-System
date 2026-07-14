@@ -17,9 +17,15 @@ const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().optional().default(''),
   TELEGRAM_ADMIN_CHAT_ID: z.string().optional().default(''),
   AGENT_ID: z.string().min(1, 'AGENT_ID must be provided').default('agent-builder-01'),
-  AGENT_ROLE: z.enum(Object.values(AgentRole)).default(AgentRole.BUILDER),
+  AGENT_ROLE: z.preprocess(
+    val => typeof val === 'string' ? val.toLowerCase() : val,
+    z.enum([...Object.values(AgentRole), 'both']).default(AgentRole.BUILDER)
+  ),
   HEARTBEAT_INTERVAL_MS: z.coerce.number().positive().default(Constants.HEARTBEAT_INTERVAL_MS),
-  LOG_LEVEL: z.enum(Object.values(LogSeverity)).default(LogSeverity.INFO),
+  LOG_LEVEL: z.preprocess(
+    val => typeof val === 'string' ? val.toLowerCase() : val,
+    z.enum(Object.values(LogSeverity)).default(LogSeverity.INFO)
+  ),
   PORT: z.coerce.number().int().positive().default(3000),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development')
 });
@@ -32,7 +38,22 @@ const envSchema = z.object({
  * @returns {z.infer<typeof envSchema>}
  */
 export function validateAndLoadEnv(customEnv = process.env) {
-  const result = envSchema.safeParse(customEnv);
+  const envMap = { ...customEnv };
+
+  // Check for command line flags overriding environment (e.g. --role=builder)
+  if (typeof process !== 'undefined' && process.argv && customEnv === process.env) {
+    for (const arg of process.argv) {
+      if (arg.startsWith('--role=')) {
+        envMap.AGENT_ROLE = arg.split('=')[1];
+      } else if (arg.startsWith('--port=')) {
+        envMap.PORT = arg.split('=')[1];
+      } else if (arg.startsWith('--id=')) {
+        envMap.AGENT_ID = arg.split('=')[1];
+      }
+    }
+  }
+
+  const result = envSchema.safeParse(envMap);
 
   if (!result.success) {
     const formattedErrors = result.error.errors.map(err => `${err.path.join('.')}: ${err.message}`).join(', ');
@@ -46,3 +67,12 @@ export function validateAndLoadEnv(customEnv = process.env) {
 
   return Object.freeze(result.data);
 }
+
+export const validateEnv = validateAndLoadEnv;
+export const env = new Proxy({}, {
+  get(_target, prop) {
+    const config = validateAndLoadEnv();
+    return config[prop];
+  }
+});
+
